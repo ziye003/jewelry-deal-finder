@@ -1,3 +1,5 @@
+珠宝捡漏小手办
+
 # Jewelry Deal Finder
 
 A personal jewelry sourcing assistant for finding potentially underpriced vintage, estate, and solid gold jewelry listings on eBay.
