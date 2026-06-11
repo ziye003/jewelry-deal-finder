@@ -3,4 +3,9 @@
 __pycache__/
 *.pyc
 .DS_Store
-output/
+
+ebay_candidates.csv
+ebay_candidates_*.csv
+deal_report.html
+deal_report_*.html
+training_dataset.csv
