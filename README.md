@@ -1,6 +1,6 @@
 珠宝捡漏小手办
 
-# Cyber gold digger
+# Cyber Gold Miner
 
 A personal jewelry sourcing assistant for finding potentially underpriced vintage, estate, and solid gold jewelry listings on eBay.
 
