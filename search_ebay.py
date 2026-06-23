@@ -76,6 +76,8 @@ COLUMN_ORDER = [
     "final_score",
     "title",
     "price",
+    "shipping_cost",
+    "total_cost",
     "image_url",
     "item_url",
     "base_score",
@@ -116,11 +118,27 @@ def normalize_my_score(value):
         return ""
     return score
 
+def extract_shipping_cost(item):
+    shipping_options = item.get("shippingOptions", []) or []
+
+    for option in shipping_options:
+        cost = option.get("shippingCost", {})
+        value = cost.get("value")
+
+        if value is not None:
+            try:
+                return float(value)
+            except ValueError:
+                return 0.0
+
+    return 0.0
 
 def score_listing(item):
     title = item.get("title", "") or ""
     seller = item.get("seller", {}).get("username", "") or ""
     price = float(item.get("price", {}).get("value", 0) or 0)
+    shipping_cost = extract_shipping_cost(item)
+    total_cost = price + shipping_cost
 
     text = f"{title} {seller}".lower()
 
@@ -147,19 +165,25 @@ def score_listing(item):
             score -= 15
             reasons.append(f"- pro seller: {word}")
 
-    if 25 <= price <= 350:
+    if total_cost <= 200:
+        score += 25
+        reasons.append("+ total under $200 with shipping")
+    elif total_cost <= 350:
         score += 12
-        reasons.append("+ good price range")
-    elif price > 800:
+        reasons.append("+ total under $350 with shipping")
+    elif total_cost > 800:
         score -= 20
-        reasons.append("- expensive")
+        reasons.append("- expensive with shipping")
+
+    if 25 <= price <= 350:
+        score += 5
+        reasons.append("+ good item price range")
 
     if len(title.split()) <= 5:
         score += 8
         reasons.append("+ short/vague title")
 
     return score, "; ".join(reasons)
-
 
 def load_csv_files(pattern="ebay_candidates*.csv"):
     files = sorted(glob.glob(pattern))
@@ -340,16 +364,19 @@ def generate_html_report(df, output_html, report_title):
         cards = []
 
         for _, row in report_df.iterrows():
-            title = html.escape(str(row.get("title", "")))
-            price = html.escape(str(row.get("price", "")))
-            seller = html.escape(str(row.get("seller", "")))
-            final_score = html.escape(str(row.get("final_score", "")))
-            base_score = html.escape(str(row.get("base_score", "")))
-            preference_score = html.escape(str(row.get("preference_score", "")))
-            reasons = html.escape(str(row.get("score_reasons", "")))
-            learned_reasons = html.escape(str(row.get("learned_reasons", "")))
-            item_url = html.escape(str(row.get("item_url", "")))
-            image_url = html.escape(str(row.get("image_url", "")))
+            title = html.escape(str(row.get("title", "")), quote=True)
+            price = html.escape(str(row.get("price", "")), quote=True)
+            shipping_cost = html.escape(str(row.get("shipping_cost", "")), quote=True)
+            total_cost = html.escape(str(row.get("total_cost", "")), quote=True)
+            seller = html.escape(str(row.get("seller", "")), quote=True)
+            final_score = html.escape(str(row.get("final_score", "")), quote=True)
+            base_score = html.escape(str(row.get("base_score", "")), quote=True)
+            preference_score = html.escape(str(row.get("preference_score", "")), quote=True)
+            reasons = html.escape(str(row.get("score_reasons", "")), quote=True)
+            learned_reasons = html.escape(str(row.get("learned_reasons", "")), quote=True)
+            item_url = html.escape(str(row.get("item_url", "")), quote=True)
+            image_url = html.escape(str(row.get("image_url", "")), quote=True)
+            item_id = html.escape(str(row.get("item_id", "")), quote=True)
 
             card = f"""
             <div class="card">
@@ -357,12 +384,30 @@ def generate_html_report(df, output_html, report_title):
                 <div class="info">
                     <h2>{title}</h2>
                     <p class="price">${price}</p>
+                    <p><b>Shipping:</b> ${shipping_cost} | <b>Total:</b> ${total_cost}</p>
                     <p><b>Final Score:</b> {final_score}</p>
                     <p><b>Base Score:</b> {base_score} | <b>Preference Score:</b> {preference_score}</p>
                     <p><b>Seller:</b> {seller}</p>
                     <p class="reasons"><b>Rule reasons:</b> {reasons}</p>
                     <p class="learned"><b>Learned reasons:</b> {learned_reasons}</p>
+
                     <a href="{item_url}" target="_blank">Open eBay Listing</a>
+
+                    <button class="bought-button"
+                        onclick="markBought(this)"
+                        data-item-id="{item_id}"
+                        data-title="{title}"
+                        data-price="{price}"
+                        data-shipping-cost="{shipping_cost}"
+                        data-total-cost="{total_cost}"
+                        data-seller="{seller}"
+                        data-final-score="{final_score}"
+                        data-base-score="{base_score}"
+                        data-preference-score="{preference_score}"
+                        data-item-url="{item_url}"
+                        data-image-url="{image_url}">
+                        Bought
+                    </button>
                 </div>
             </div>
             """
@@ -418,21 +463,121 @@ def generate_html_report(df, output_html, report_title):
                 color: #8a4b00;
                 font-size: 14px;
             }}
-            a {{
+            a, button {{
                 display: inline-block;
                 margin-top: 8px;
+                margin-right: 8px;
                 color: white;
                 background: #333;
                 padding: 8px 12px;
                 border-radius: 6px;
                 text-decoration: none;
+                border: none;
+                cursor: pointer;
+                font-size: 14px;
+            }}
+            .bought-button {{
+                background: #7a4a16;
+            }}
+            .bought-button:disabled {{
+                background: #999;
+                cursor: not-allowed;
+            }}
+            .download-button {{
+                background: #1f5f3f;
+                margin-bottom: 18px;
             }}
         </style>
     </head>
+
     <body>
         <h1>{html.escape(report_title)}</h1>
         <p>Showing unreviewed candidates only. Fill <b>my_score</b> in the CSV after review.</p>
+
+        <button class="download-button" onclick="downloadBoughtCSV()">Download bought_items.csv</button>
+
         {cards_html}
+
+        <script>
+            function getBoughtItems() {{
+                return JSON.parse(localStorage.getItem("bought_items") || "[]");
+            }}
+
+            function saveBoughtItems(items) {{
+                localStorage.setItem("bought_items", JSON.stringify(items));
+            }}
+
+            function markBought(button) {{
+                const item = {{
+                    bought_date: new Date().toISOString(),
+                    item_id: button.dataset.itemId,
+                    title: button.dataset.title,
+                    price: button.dataset.price,
+                    shipping_cost: button.dataset.shippingCost,
+                    total_cost: button.dataset.totalCost,
+                    seller: button.dataset.seller,
+                    final_score: button.dataset.finalScore,
+                    base_score: button.dataset.baseScore,
+                    preference_score: button.dataset.preferenceScore,
+                    item_url: button.dataset.itemUrl,
+                    image_url: button.dataset.imageUrl
+                }};
+
+                let boughtItems = getBoughtItems();
+
+                const alreadyExists = boughtItems.some(x => x.item_id === item.item_id);
+
+                if (!alreadyExists) {{
+                    boughtItems.push(item);
+                    saveBoughtItems(boughtItems);
+                }}
+
+                button.innerText = "Bought ✓";
+                button.disabled = true;
+            }}
+
+            function downloadBoughtCSV() {{
+                const boughtItems = getBoughtItems();
+
+                if (boughtItems.length === 0) {{
+                    alert("No bought items yet.");
+                    return;
+                }}
+
+                const headers = [
+                    "bought_date",
+                    "item_id",
+                    "title",
+                    "price",
+                    "shipping_cost",
+                    "total_cost",
+                    "seller",
+                    "final_score",
+                    "base_score",
+                    "preference_score",
+                    "item_url",
+                    "image_url"
+                ];
+
+                const rows = boughtItems.map(item =>
+                    headers.map(h => {{
+                        const value = String(item[h] || "");
+                        return `"${{value.replaceAll('"', '""')}}"`;
+                    }}).join(",")
+                );
+
+                const csv = [headers.join(","), ...rows].join("\\n");
+                const blob = new Blob([csv], {{ type: "text/csv;charset=utf-8;" }});
+                const url = URL.createObjectURL(blob);
+
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "bought_items.csv";
+                a.click();
+
+                URL.revokeObjectURL(url);
+            }}
+        </script>
     </body>
     </html>
     """
@@ -496,6 +641,8 @@ def main():
                     "final_score": final_score,
                     "title": item.get("title"),
                     "price": item.get("price", {}).get("value"),
+                    "shipping_cost": extract_shipping_cost(item),
+                    "total_cost": float(item.get("price", {}).get("value", 0) or 0) + extract_shipping_cost(item),
                     "image_url": image_url,
                     "item_url": item.get("itemWebUrl"),
                     "base_score": base_score,
