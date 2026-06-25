@@ -2,6 +2,7 @@ import argparse
 import glob
 import html
 import os
+from pydoc import text
 import re
 from datetime import date, datetime, timezone
 
@@ -61,6 +62,56 @@ NEGATIVE_SIGNALS = [
     "stainless",
 ]
 
+SILVER_OR_NON_PRECIOUS_SIGNALS = [
+    "sterling",
+    "sterling silver",
+    "925",
+    "s925",
+    "silver",
+    "ss",
+    "stainless",
+    "stainless steel",
+    "steel",
+    "brass",
+    "copper",
+    "alloy",
+    "pewter",
+    "costume",
+]
+
+NON_VINTAGE_SIGNALS = [
+    "modern",
+    "new",
+    "fashion",
+    "contemporary",
+    "current",
+]
+COSTUME_BRANDS = [
+    "monet", "avon", "sarah coventry", "trifari", "lisner", "napier",
+    "jj", "j.j.", "park lane", "coro", "west germany", "roman",
+    "1928", "goldette", "dujay", "swarovski",
+]
+
+HEAVY_NEGATIVE_SIGNALS = [
+    "electroplated",
+    "gold electroplate",
+    "g.e.",
+    " ge ",
+    "rhinestone",
+    "rhinestones",
+    "crystal",
+    "crystals",
+    "gold tone",
+    "silver tone",
+    "unsigned",
+    "wearable craft",
+    "craft lot",
+    "unsearched",
+    "to now",
+    "vintage to now",
+    "huge jewelry lot",
+]
+
 PRO_SELLER_WORDS = [
     "jewelry",
     "jewelers",
@@ -69,6 +120,20 @@ PRO_SELLER_WORDS = [
     "gems",
     "gold",
     "pawn",
+]
+GOLD_EVIDENCE = [
+    "14k",
+    "10k",
+    "9k",
+    "8k",
+    "585",
+    "417",
+    "375",
+    "333",
+    "tested gold",
+    "solid gold",
+    "scrap gold",
+    "yellow metal",
 ]
 
 COLUMN_ORDER = [
@@ -133,57 +198,6 @@ def extract_shipping_cost(item):
 
     return 0.0
 
-def score_listing(item):
-    title = item.get("title", "") or ""
-    seller = item.get("seller", {}).get("username", "") or ""
-    price = float(item.get("price", {}).get("value", 0) or 0)
-    shipping_cost = extract_shipping_cost(item)
-    total_cost = price + shipping_cost
-
-    text = f"{title} {seller}".lower()
-
-    score = 0
-    reasons = []
-
-    for word in POSITIVE_SIGNALS:
-        if word in text:
-            score += 10
-            reasons.append(f"+ {word}")
-
-    for word in HIDDEN_GOLD_SIGNALS:
-        if word in text:
-            score += 15
-            reasons.append(f"+ hidden gold: {word}")
-
-    for word in NEGATIVE_SIGNALS:
-        if word in text:
-            score -= 35
-            reasons.append(f"- {word}")
-
-    for word in PRO_SELLER_WORDS:
-        if word in seller.lower():
-            score -= 15
-            reasons.append(f"- pro seller: {word}")
-
-    if total_cost <= 200:
-        score += 25
-        reasons.append("+ total under $200 with shipping")
-    elif total_cost <= 350:
-        score += 12
-        reasons.append("+ total under $350 with shipping")
-    elif total_cost > 800:
-        score -= 20
-        reasons.append("- expensive with shipping")
-
-    if 25 <= price <= 350:
-        score += 5
-        reasons.append("+ good item price range")
-
-    if len(title.split()) <= 5:
-        score += 8
-        reasons.append("+ short/vague title")
-
-    return score, "; ".join(reasons)
 
 def load_csv_files(pattern="ebay_candidates*.csv"):
     files = sorted(glob.glob(pattern))
@@ -279,6 +293,105 @@ def build_preference_weights(existing_df):
 
     return weights
 
+def score_listing(item):
+    title = item.get("title", "") or ""
+    seller = item.get("seller", {}).get("username", "") or ""
+    price = float(item.get("price", {}).get("value", 0) or 0)
+    shipping_cost = extract_shipping_cost(item)
+    total_cost = price + shipping_cost
+
+    text = f"{title} {seller}".lower()
+    padded_text = f" {text} "
+    score = 0
+    reasons = []
+
+    for word in HEAVY_NEGATIVE_SIGNALS:
+        if word in padded_text:
+            score -= 45
+            reasons.append(f"- heavy negative: {word.strip()}")
+
+    costume_brand_count = 0
+    for brand in COSTUME_BRANDS:
+        if brand in text:
+            costume_brand_count += 1
+
+    if costume_brand_count >= 2:
+        score -= 100
+        reasons.append("- costume jewelry brands")
+    elif costume_brand_count == 1:
+        score -= 60
+        reasons.append("- costume jewelry brand")
+
+    if "jewelry lot" in text or "jewellery lot" in text:
+        if costume_brand_count >= 1:
+            score -= 50
+            reasons.append("- costume jewelry lot")
+        elif not any(x in text for x in [
+            "14k", "10k", "9k", "585", "417", "375",
+            "tested gold", "solid gold", "scrap gold"
+        ]):
+            score -= 50
+            reasons.append("- generic jewelry lot")
+
+    gold_hits = sum(1 for word in GOLD_EVIDENCE if word in text)
+    if gold_hits > 0:
+        score += gold_hits * 10
+        reasons.append(f"+ gold evidence x{gold_hits}")
+
+    for word in POSITIVE_SIGNALS:
+        if word in text:
+            score += 10
+            reasons.append(f"+ {word}")
+
+    for word in HIDDEN_GOLD_SIGNALS:
+        if word in text:
+            score += 15
+            reasons.append(f"+ hidden gold: {word}")
+
+    for word in NEGATIVE_SIGNALS:
+        if word in text:
+            score -= 35
+            reasons.append(f"- {word}")
+
+    for word in SILVER_OR_NON_PRECIOUS_SIGNALS:
+        if word in text:
+            score -= 18
+            reasons.append(f"- silver/non-precious: {word}")
+
+    if "jewelry lot" in text or "jewellery lot" in text:
+        if any(word in text for word in SILVER_OR_NON_PRECIOUS_SIGNALS):
+            score -= 30
+            reasons.append("- silver/non-precious jewelry lot")
+
+    has_vintage_signal = any(word in text for word in ["vintage", "estate", "antique", "old"])
+    if not has_vintage_signal:
+        score -= 10
+        reasons.append("- not vintage/estate/antique")
+
+    for word in PRO_SELLER_WORDS:
+        if word in seller.lower():
+            score -= 15
+            reasons.append(f"- pro seller: {word}")
+
+    if total_cost <= 200:
+        score += 25
+        reasons.append("+ total under $200 with shipping")
+    elif total_cost <= 350:
+        score += 12
+        reasons.append("+ total under $350 with shipping")
+    elif total_cost > 800:
+        score -= 20
+        reasons.append("- expensive with shipping")
+
+    if 25 <= price <= 350:
+        score += 5
+        reasons.append("+ good item price range")
+
+    if len(title.split()) <= 5:
+        score += 8
+        reasons.append("+ short/vague title")
+
+    return score, "; ".join(reasons)
 
 def preference_score_listing(item, preference_weights):
     title = item.get("title", "") or ""
